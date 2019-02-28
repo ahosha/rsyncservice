@@ -1,0 +1,22 @@
+[Unit]
+Description=Rsyncservice
+After=default.target
+
+[Service]
+Type=simple
+LimitNOFILE=1024
+
+Restart=on-failure
+RestartSec=10
+
+WorkingDirectory=/etc/ha/anchor
+ExecStart=/usr/bin/rsyncservice --daemons
+
+# make sure log directory exists and owned by syslog
+
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=rsyncservice
+
+[Install]
+WantedBy=default.target

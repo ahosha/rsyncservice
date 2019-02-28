@@ -1,0 +1,86 @@
+image: q1docker-dev.canlab.ibm.com/si-security-rust-scanner-1.30.0-test:256127
+
+variables:
+  TEAMNAME: "hardy"
+
+before_script:
+- 'source ci/gitlab-ci-creds.sh'
+- 'ci/gitlab-ci-precheck.sh'
+- 'ci/gitlab-ci-checkout.sh'
+#- cargo clippy --all-targets --all-features -- -D warnings
+
+stages:
+- build
+- test
+- publish
+
+build:
+  stage: build
+  script:
+  - mkdir -p ${RUSTPATH}/$(dirname /${TEAMNAME})
+  - test -d ${PROJECT_RUST_PATH} || ln -s ${RUSTPATH}/${CI_PROJECT_NAMESPACE} ${RUSTPATH}/${TEAMNAME}
+  - test -d ${RUSTPATH}/${CI_PROJECT_PATH} && cd ${RUSTPATH}/${TEAMNAME}/${CI_PROJECT_NAME}
+  - ./gradlew rustBuild --info --stacktrace
+  tags:
+  - docker
+  except:
+  - tags
+
+unittest:
+   stage: test
+   script:
+   - cargo test --verbose
+   tags:
+   - docker
+   except:
+   - tags
+   artifacts:
+     when: always
+     paths:
+     - src/
+     expire_in: 1 week
+
+fvttest:
+  stage: test
+  script:
+  - mkdir -p ${RUSTPATH}/$(dirname /${TEAMNAME})
+  - test -d ${PROJECT_RUST_PATH} || ln -s ${RUSTPATH}/${CI_PROJECT_NAMESPACE} ${RUSTPATH}/${TEAMNAME}
+  - test -d ${RUSTPATH}/${CI_PROJECT_PATH} && cd ${RUSTPATH}/${TEAMNAME}/${CI_PROJECT_NAME}
+  - export TERRAFORM_DIR=/opt/terraform
+  #- ./gradlew fvtTestVsphere --info --stacktrace
+  tags:
+  - docker
+  except:
+  - tags
+  artifacts:
+    when: always
+    paths:
+    - fvt/build/reports
+    expire_in: 1 week
+  dependencies:
+  - build
+
+
+publishToSnapshot:
+  stage: publish
+  variables:
+    ORG_GRADLE_PROJECT_artifactory_publish_repo: "hardy-gradle-snapshot-local"
+  script:
+  - git status
+  - ./gradlew buildRpm artifactoryPublish --info --stacktrace
+  except:
+  - tags
+  tags:
+  - docker
+
+release:
+  stage: publish
+  variables:
+    ORG_GRADLE_PROJECT_artifactory_publish_repo: "hardy-gradle-release-local"
+  script:
+  - git status
+  - ./gradlew buildRpm artifactoryPublish -Prelease.useLastTag=true --info --stacktrace
+  only:
+  - tags@hardy/anchor
+  tags:
+  - docker

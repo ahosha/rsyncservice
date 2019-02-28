@@ -1,0 +1,229 @@
+
+
+apply plugin: 'idea'
+apply plugin: 'groovy'
+apply plugin: 'com.bmuschko.vagrant'
+
+
+buildscript {
+    repositories {
+        maven {
+            url "$artifactory_contextUrl/all-gradle-plugins"
+            credentials {
+                username = "${artifactory_user}"
+                password = "${artifactory_password}"
+            }
+        }
+        maven {
+            credentials {
+                username = "${artifactory_user}"
+                password = "${artifactory_password}"
+            }
+            url "${artifactory_contextUrl}/zen-gradle-release-local/"
+        }
+        maven {
+            credentials {
+                username = "${artifactory_user}"
+                password = "${artifactory_password}"
+            }
+            url "${artifactory_contextUrl}/zen-gradle-snapshot-local/"
+        }
+    }
+
+
+    dependencies {
+        classpath 'com.bmuschko:gradle-vagrant-plugin:2.1'
+
+    }
+}
+
+repositories {
+    maven {
+        credentials {
+            username = "${artifactory_user}"
+            password = "${artifactory_password}"
+        }
+        url "${artifactory_contextUrl}/mavencentral/"
+    }
+}
+    dependencies {
+        compile 'com.aestasit.infrastructure.sshoogr:sshoogr:0.9.26'
+        compile 'org.codehaus.groovy:groovy-all:2.4.1'
+        testCompile 'org.slf4j:slf4j-api:1.7.23'
+        testCompile 'org.spockframework:spock-core:1.0-groovy-2.4'
+    }
+
+    ext {
+        version = "1.0"
+        description = "Anchor Rsync Functional Verification Test"
+        provisioningDir = new File("${getRootDir()}/provisioning/")
+        vagrantEnv = new File("${provisioningDir}/vagrant.env")
+        vsphereEnv = new File("${provisioningDir}/vsphere_ip_box1.env")
+        vsphereEnv_ip = new File("${provisioningDir}/vsphere_ip_box2.env")
+
+        //vagrantProjectDir = "/home/vagrant/go/src/${goProjectPackagePath}"
+        now = {
+            new Date().format("yyyyMMddHHmmss")
+        }
+    }
+
+    vagrant {
+        boxDir provisioningDir
+
+        installation {
+            validate false
+        }
+    }
+
+    vagrantUp {
+        description = "Runs the vagrant"
+
+        doLast {
+            // ensure vagrant.env is set to the default value
+            if (!vagrantEnv.exists()) {
+                vagrantEnv.createNewFile()
+            }
+            vagrantEnv.setText("localhost")
+
+
+        }
+
+    }
+
+    vagrantDestroy {
+        onlyIf {
+            if (project.hasProperty("vagrantKeep")) {
+                // run if -PvagrantKeep=false
+                project.getProperty("vagrantKeep") == "false"
+            } else {
+                // skip by default
+                false
+            }
+        }
+
+        doLast {
+            vagrantEnv.delete()
+        }
+    }
+
+// run the tests on a vagrant machine (over ssh)
+// the vagrant machine will skip destruction by default (-PvagrantKeep=false to destroy)
+    task vagrantTest(type: Test) {
+        dependsOn ':fvtDependencies'
+        dependsOn vagrantUp
+
+        finalizedBy vagrantDestroy
+    }
+
+    task vsphereUp(type: Exec) {
+//    outputs.upToDateWhen {
+//        vsphereEnv.exists()
+//    }
+        dependsOn ':downloadArticfactForTestRunner'
+
+        doLast {
+            // ensure env files do not conflict
+            if (vagrantEnv.exists()) {
+                vagrantEnv.renameTo(new File("${provisioningDir}/vsphere-${now()}.env.old"))
+            }
+        }
+
+        workingDir getRootDir()
+        commandLine "/bin/bash", "${provisioningDir}/scripts/vsphere.sh"
+
+    }
+
+    task vsphereDestroy() {
+        onlyIf {
+            if (project.hasProperty("vsphereKeep")) {
+                // skip if -PvsphereKeep=true
+                project.getProperty("vsphereKeep") != "true"
+            } else {
+                // run by default
+                true
+            }
+        }
+
+
+        doLast {
+            exec {
+                def terraformDir = System.getenv("TERRAFORM_DIR")
+                if (terraformDir != null) {
+                    workingDir terraformDir
+                } else {
+                    workingDir provisioningDir
+                }
+
+                standardInput new StringBufferInputStream("yes")
+                commandLine "terraform", "destroy", provisioningDir
+            }
+
+            vsphereEnv.delete()
+            vsphereEnv_ip.delete()
+
+
+        }
+    }
+
+
+    task vsphereTest(type: Test) {
+        description = "Runs test on a Vsphere virtual machine"
+        dependsOn ':fvtDependencies'
+        dependsOn vsphereUp
+       finalizedBy vsphereDestroy
+
+    }
+
+test {
+    dependsOn ':fvtDependencies'
+}
+
+clean {
+    doLast {
+        new FileNameFinder().getFileNames(provisioningDir.getPath(), "*.env.old").each {
+            new File(it).delete()
+        }
+    }
+
+    dependsOn {
+        if (!project.hasProperty("vagrantKeep")) {
+            project.ext.set("vagrantKeep", "false")
+        }
+
+        if (!project.hasProperty("vsphereKeep")) {
+            project.ext.set("vsphereKeep", "false")
+        }
+
+        [vsphereDestroy]
+    }
+}
+
+// :fvt:check is a dependency of the build task in the main project.
+// remove dependency on :fvt:test so that we dont run fvt on every build.
+check {
+    dependsOn.remove(test)
+}
+
+
+// common configuration for test tasks
+    tasks.withType(Test) {
+        // never skip running the tests
+        outputs.upToDateWhen {
+            false
+        }
+
+        testLogging {
+            // show the result of each test, without passing --info
+            events "passed", "skipped", "failed"
+            // show the total number of tests on success
+            afterSuite { desc, result ->
+                if (!desc.getParent()) {
+                    if (result.getResultType() == TestResult.ResultType.SUCCESS) {
+                        println "\n${result.getTestCount()} tests completed"
+
+
+                    }
+                }
+            }
+        }
+    }

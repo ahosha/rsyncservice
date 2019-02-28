@@ -1,0 +1,241 @@
+
+buildscript {
+    repositories {
+        maven {
+            url "$artifactory_contextUrl/all-gradle-plugins"
+            credentials {
+                username = "${artifactory_user}"
+                password = "${artifactory_password}"
+            }
+
+        }
+    }
+
+
+    dependencies {
+        classpath "org.jfrog.buildinfo:build-info-extractor-gradle:4.7.3"
+        classpath 'com.netflix.nebula:gradle-ospackage-plugin:4.6.0'
+        classpath 'com.netflix.nebula:nebula-release-plugin:6.3.0'
+        classpath 'de.undercouch:gradle-download-task:3.2.0'
+
+
+    }
+}
+plugins {
+    id 'com.gradle.build-scan' version '1.9'
+}
+import de.undercouch.gradle.tasks.download.Download
+
+apply plugin: 'idea'
+apply plugin: 'maven-publish'
+apply plugin: "com.jfrog.artifactory"
+apply plugin: 'nebula.ospackage'
+apply plugin: 'nebula.nebula-release'
+
+
+
+buildScan {
+    server = 'https://si-fred-gradle.canlab.ibm.com'
+    allowUntrustedServer = true
+
+    if (System.getenv('CI')) {
+        tag 'CI'
+    } else {
+        tag 'Local'
+    }
+
+    tag System.getProperty('os.name')
+}
+
+
+
+
+task wrapper(type: Wrapper) {
+    gradleVersion = '4.6'
+}
+
+project.group = artifact_group
+
+ext {
+
+    version = new RpmVersion ( "${project.version}" , "1" )
+
+    destroyVms = true
+
+}
+
+task rustBuild {
+    description = "Runs the cargo build"
+    inputs.files(fileTree(".") { include "**/*.rs"})
+    doLast {
+        logger.info("Current OS is : " + org.gradle.internal.os.OperatingSystem.current())
+        exec {
+            workingDir "${projectDir}"
+            commandLine "cargo", "build","--release"
+        }
+    }
+}
+
+ospackage {
+    packageGroup = 'Applications/Network'
+    license = 'IBM Corp.'
+    vendor = 'IBM Corp.'
+    url = 'www.ibm.com'
+    packager  = 'IBM Corp.'
+    version = project.ext.version.getVersion()
+    release = project.ext.version.getRelease()
+    os = LINUX
+    arch = X86_64
+    packageName = project.name
+    summary = ''
+    description = ''
+    user = 'root'
+
+    from ('target/release/rsyncservice') {
+        into '/usr/bin'
+        fileMode = 0700
+    }
+
+    from ('conf/anchor.toml') {
+        into '/var/lib/anchor'
+        fileMode = 0700
+    }
+
+    from ('conf.d/config.toml') {
+        into '/var/lib/anchor'
+        fileMode = 0700
+    }
+
+
+    from ('systemd') {
+        user 'root'
+        into '/lib/systemd/system'
+        fileMode = 0700
+    }
+
+
+}
+
+buildRpm {
+    addParentDirs = false
+    dependsOn build
+
+}
+
+build {
+    dependsOn rustBuild
+}
+
+
+task fvtTest() {
+    description = "Calls test method in fvt module"
+    dependsOn ':fvt:test'
+}
+
+
+task fvtTestVsphere() {
+    description = "Calls vsphere test in fvt module"
+    dependsOn ':fvt:vsphereTest'
+}
+
+
+publishing {
+    publications {
+        mavenRpmPub(MavenPublication) {
+            groupId project.group
+            artifactId project.name
+            version buildRpm.version
+            artifact(file("${buildRpm.destinationDir}/${buildRpm.archiveName}")) {
+                classifier buildRpm.release + '.' + buildRpm.archString
+            }
+        }
+        }
+    }
+
+
+artifactoryPublish {
+    dependsOn buildRpm
+    skip false
+}
+
+publish {
+    dependsOn buildRpm
+}
+
+publishToMavenLocal {
+    dependsOn buildRpm
+}
+
+artifactory {
+    contextUrl = "${artifactory_contextUrl}"
+    publish {
+        repository {
+            repoKey = "${artifactory_publish_repo}"
+            username = "${artifactory_user}"
+            password = "${artifactory_password}"
+            maven = true
+        }
+        defaults {
+            publications('mavenRpmPub')
+            publishBuildInfo = true
+            publishArtifacts = true
+            publishPom = true
+            publishIvy = true
+        }
+    }
+    resolve {
+        repository {
+            repoKey = 'libs-release'
+            username = "${artifactory_user}"
+            password = "${artifactory_password}"
+            maven = true
+        }
+    }
+}
+
+
+task fvtDependencies(type: Copy) {
+    description = "Creates fvt dependencies"
+
+
+    logger.info("Current OS is : " + org.gradle.internal.os.OperatingSystem.current())
+    def platform
+    if(fvtBinaryPlatform != "system") {
+        platform = fvtBinaryPlatform
+    }else if (org.gradle.internal.os.OperatingSystem.current().isLinux()) {
+        platform = 'linux-amd64'
+    } else if (org.gradle.internal.os.OperatingSystem.current().isMacOsX()) {
+        platform = 'darwin-amd64'
+    } else if (org.gradle.internal.os.OperatingSystem.current().isUnix()) {
+        platform = 'n/a'
+    } else if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        platform = 'n/a'
+    } else {
+        platform = 'n/a'
+    }
+    logger.info("Detected Platform = ${platform}")
+    from ('target/release')
+    into project('fvt').file('src/test/resources')
+
+    outputs.upToDateWhen { false }
+}
+
+task printVersion {
+    doLast {
+        println()
+        println(version)
+        println(buildDir)
+    }
+}
+
+task downloadArticfactForTestRunner(type: Download){
+
+    username "${artifactory_user}"
+    password  "${artifactory_password}"
+    src "${artifactory_contextUrl}/hardy-gradle-snapshot-local/com/ibm/si/hardy/anchor/0.1.0/${rpm}"
+    dest "${projectDir}/provisioning/rpm"
+    onlyIfNewer true
+    overwrite true
+    acceptAnyCertificate true
+}
+

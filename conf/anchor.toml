@@ -1,0 +1,10 @@
+[destination]
+
+ip = 
+
+
+[config]
+config_folder = "/etc/ha/anchor/conf.d"
+qradar_integrated = false
+
+

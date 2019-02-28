@@ -1,0 +1,39 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# All Vagrant configuration is done below. The "2" in Vagrant.configure
+# configures the configuration version (we support older styles for
+# backwards compatibility). Please don't change it unless you know what
+# you're doing.
+
+user_home = ENV["HOME"]
+
+Vagrant.configure("2") do |config|
+
+config.vm.define "Rustbox1" do |box1|
+  box1.vm.box = "centos/7"
+  box1.vm.network "private_network", ip: "172.18.216.55"
+  box1.vm.hostname = "Rustbox1"
+  end
+
+config.vm.define "Rustbox2" do |box2|
+  box2.vm.box = "centos/7"
+  box2.vm.network "private_network", ip: "172.18.216.56"
+  box2.vm.hostname = "Rustbox2"
+  end
+
+  config.ssh.username = 'root'
+  config.ssh.password = 'vagrant'
+  config.ssh.insert_key = 'true'
+
+
+  config.vm.synced_folder ".", "/provisioning"
+    config.vm.synced_folder "..", "/home/vagrant/rust/src/q1git.canlab.ibm.com/ha/anchor"
+    config.vm.synced_folder "#{user_home}/.gradle", "/home/vagrant/.gradle"
+
+
+
+config.vm.provision "shell", inline: <<-SHELL
+    /usr/bin/tr -d '\r' < /provisioning/scripts/vagrant.sh | /bin/bash -x
+  SHELL
+end
